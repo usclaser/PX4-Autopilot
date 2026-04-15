@@ -162,9 +162,9 @@ param set-default SC_ROLLRATE_D 0.004
 param set-default SC_PITCHRATE_D 0.00
 
 # Custom PWM_MAIN designation for motors
-param set-default PWM_MAIN_TIM0 10
-param set-default PWM_MAIN_TIM1 10
-param set-default PWM_MAIN_TIM2 10
+param set-default PWM_MAIN_TIM0 25
+param set-default PWM_MAIN_TIM1 25
+param set-default PWM_MAIN_TIM2 25
 
 param set-default PWM_MAIN_FUNC1 101
 param set-default PWM_MAIN_FUNC2 102
