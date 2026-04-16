@@ -20,7 +20,7 @@
 
 . ${R}etc/init.d/rc.sc_defaults
 
-# Overwrite DDS AG IP to `192.168.0.1`
+# Overwrite DDS AG IP to `10.42.0.10`
 param set-default UXRCE_DDS_AG_IP 170524682
 
 param set-default CA_AIRFRAME 14
