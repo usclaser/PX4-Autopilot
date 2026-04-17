@@ -13,6 +13,13 @@ Before running, source your ROS 2 overlay that provides px4_msgs, e.g.:
 Run:
   python3 px4_keyboard_manual_teleop.py
 
+True open-loop (no commanded wrench unless you move sticks / keys):
+  • FC must be in PX4 Manual (nav_state MANUAL), not Position/Hold/Mission/Offboard-position.
+    If QGC still station-keeps, you are not in Manual — verify nav_state and control_position.
+  • In Manual + spacecraft, centered inputs → zero thrust/torque from the manual/direct path.
+  • Disarm (D) when not testing so outputs stay in the disarmed state; do not arm until you intend to fire.
+  • Avoid a second manual source (QGC virtual stick, RC) fighting this node.
+
 Controls (spacecraft Manual/direct mapping in SpacecraftRateControl):
   Arrow Up/Down     body X thrust (forward / back)
   Arrow Left/Right    body Y thrust (left / right)
@@ -70,6 +77,9 @@ class Px4KeyboardManualTeleop(Node):
         # Match `commander arm -f` (VEHICLE_CMD_COMPONENT_ARM_DISARM + magic param2, from_external=false)
         self.declare_parameter("force_arm", True)
         self.declare_parameter("force_disarm", False)
+        # Manual stick throttle when not using throttle for translation [-1, 1]; -1 = full down (no +Z thrust cmd).
+        # Avoids NaN so arming checks / consumers see a defined idle input.
+        self.declare_parameter("idle_throttle", -1.0)
 
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -95,6 +105,7 @@ class Px4KeyboardManualTeleop(Node):
         self._stick_gain = self.get_parameter("stick_gain").get_parameter_value().double_value
         self._force_arm = self.get_parameter("force_arm").get_parameter_value().bool_value
         self._force_disarm = self.get_parameter("force_disarm").get_parameter_value().bool_value
+        self._idle_throttle = self.get_parameter("idle_throttle").get_parameter_value().double_value
         rate = self.get_parameter("publish_rate_hz").get_parameter_value().double_value
         period = 1.0 / max(rate, 1.0)
 
@@ -253,7 +264,7 @@ class Px4KeyboardManualTeleop(Node):
         out.pitch = float(pitch)
         out.roll = float(roll)
         out.yaw = float(yaw)
-        out.throttle = float("nan")
+        out.throttle = float(self._idle_throttle)
         out.flaps = float("nan")
         for name in ("aux1", "aux2", "aux3", "aux4", "aux5", "aux6"):
             setattr(out, name, float("nan"))
