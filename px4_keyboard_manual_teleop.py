@@ -18,9 +18,13 @@ Controls (spacecraft Manual/direct mapping in SpacecraftRateControl):
   Arrow Left/Right    body Y thrust (left / right)
   Z / X               yaw torque (left / right)
   M                   send Manual mode (VEHICLE_CMD_DO_SET_MODE)
-  A / D               arm / disarm
+  A / D               arm / disarm (default: same as `commander arm -f` / normal disarm — see parameters)
   Space               zero all sticks
   Q or Ctrl+C         quit
+
+Arming uses VEHICLE_CMD_COMPONENT_ARM_DISARM with param2=21196 when force_arm is true (PX4
+magic value used by `commander arm -f`). from_external is set false in that case so preflight
+checks are skipped like the NSH shell command — you cannot run `commander` itself from the host.
 
 Safety: only use with props unpowered or vehicle restrained. You are responsible for arming rules.
 """
@@ -49,6 +53,9 @@ from px4_msgs.msg import VehicleCommand, ManualControlSetpoint
 MAV_MODE_FLAG_CUSTOM_MODE_ENABLED = 1.0
 PX4_CUSTOM_MAIN_MODE_MANUAL = 1.0
 
+# Commander.cpp: `commander arm -f` / `disarm -f` use param2 == 21196 (force, skip arming checks)
+PX4_FORCE_ARM_DISARM_MAGIC = 21196.0
+
 
 class Px4KeyboardManualTeleop(Node):
     def __init__(self) -> None:
@@ -60,6 +67,9 @@ class Px4KeyboardManualTeleop(Node):
         self.declare_parameter("cmd_topic_vehicle_command", "/fmu/in/vehicle_command")
         self.declare_parameter("cmd_topic_manual_control", "/fmu/in/manual_control_input")
         self.declare_parameter("publish_rate_hz", 50.0)
+        # Match `commander arm -f` (VEHICLE_CMD_COMPONENT_ARM_DISARM + magic param2, from_external=false)
+        self.declare_parameter("force_arm", True)
+        self.declare_parameter("force_disarm", False)
 
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -83,6 +93,8 @@ class Px4KeyboardManualTeleop(Node):
             self.get_parameter("target_system").get_parameter_value().integer_value
         )
         self._stick_gain = self.get_parameter("stick_gain").get_parameter_value().double_value
+        self._force_arm = self.get_parameter("force_arm").get_parameter_value().bool_value
+        self._force_disarm = self.get_parameter("force_disarm").get_parameter_value().bool_value
         rate = self.get_parameter("publish_rate_hz").get_parameter_value().double_value
         period = 1.0 / max(rate, 1.0)
 
@@ -95,7 +107,8 @@ class Px4KeyboardManualTeleop(Node):
         self._listener.start()
 
         self.get_logger().info(
-            "Started. Press M for Manual mode, A to arm, D to disarm. Arrow keys + Z/X to drive. Q to quit."
+            "Started. M=Manual, A=arm (force=%s), D=disarm (force=%s). Arrows+Z/X. Q=quit."
+            % (self._force_arm, self._force_disarm)
         )
 
     def destroy_node(self) -> bool:
@@ -199,11 +212,13 @@ class Px4KeyboardManualTeleop(Node):
         self.get_logger().info("Sent VEHICLE_CMD_DO_SET_MODE -> Manual")
 
     def _send_arm(self, arm: bool) -> None:
+        """Same mechanism as `commander arm [-f]` / `disarm [-f]` (not subprocess — PX4 NSH only)."""
+        force = self._force_arm if arm else self._force_disarm
         msg = VehicleCommand()
         msg.timestamp = self._stamp_us()
         msg.command = VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM
         msg.param1 = 1.0 if arm else 0.0
-        msg.param2 = 0.0
+        msg.param2 = PX4_FORCE_ARM_DISARM_MAGIC if force else 0.0
         msg.param3 = 0.0
         msg.param4 = 0.0
         msg.param5 = 0.0
@@ -214,9 +229,14 @@ class Px4KeyboardManualTeleop(Node):
         msg.source_system = 1
         msg.source_component = 1
         msg.confirmation = 0
-        msg.from_external = True
+        # Commander.cpp: arm(..., cmd.from_external || !forced) — for forced arm, from_external must
+        # be false to skip preflight (matches internal send_vehicle_command used by NSH `commander`).
+        msg.from_external = not force
         self._pub_cmd.publish(msg)
-        self.get_logger().info("Sent ARM" if arm else "Sent DISARM")
+        tag = "ARM" if arm else "DISARM"
+        if force:
+            tag += " (force, param2=%d)" % int(PX4_FORCE_ARM_DISARM_MAGIC)
+        self.get_logger().info("Sent %s" % tag)
 
     def _on_timer(self) -> None:
         if getattr(self, "_shutdown_requested", False):
