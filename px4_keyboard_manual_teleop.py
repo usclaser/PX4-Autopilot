@@ -20,6 +20,9 @@ True open-loop (no commanded wrench unless you move sticks / keys):
   • Disarm (D) when not testing so outputs stay in the disarmed state; do not arm until you intend to fire.
   • Avoid a second manual source (QGC virtual stick, RC) fighting this node.
 
+On Linux/Ubuntu terminals, arrow keys send escape sequences; the script disables TTY echo so you
+do not see stray characters like ^[A. If anything still prints, run: stty sane
+
 Controls (spacecraft Manual/direct mapping in SpacecraftRateControl):
   Arrow Up/Down     body X thrust (forward / back)
   Arrow Left/Right    body Y thrust (left / right)
@@ -39,6 +42,8 @@ Safety: only use with props unpowered or vehicle restrained. You are responsible
 from __future__ import annotations
 
 import math
+import os
+import sys
 import threading
 import time
 
@@ -62,6 +67,35 @@ PX4_CUSTOM_MAIN_MODE_MANUAL = 1.0
 
 # Commander.cpp: `commander arm -f` / `disarm -f` use param2 == 21196 (force, skip arming checks)
 PX4_FORCE_ARM_DISARM_MAGIC = 21196.0
+
+
+def _tty_echo_off() -> tuple[int, list] | None:
+    """Stop the terminal from echoing arrow-key escape sequences (e.g. ^[A on Linux). pynput still receives keys."""
+    if os.name != "posix" or not sys.stdin.isatty():
+        return None
+    import termios
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    new = termios.tcgetattr(fd)
+    # lflags: disable echo (and control-char echo if available)
+    new[3] &= ~termios.ECHO
+    if hasattr(termios, "ECHOCTL"):
+        new[3] &= ~termios.ECHOCTL
+    termios.tcsetattr(fd, termios.TCSADRAIN, new)
+    return (fd, old)
+
+
+def _tty_restore(saved: tuple[int, list] | None) -> None:
+    if saved is None:
+        return
+    import termios
+
+    fd, old = saved
+    try:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    except OSError:
+        pass
 
 
 class Px4KeyboardManualTeleop(Node):
@@ -277,18 +311,22 @@ class Px4KeyboardManualTeleop(Node):
 
 
 def main() -> None:
+    tty_saved = _tty_echo_off()
     rclpy.init()
-    node = Px4KeyboardManualTeleop()
+    node = None
     try:
+        node = Px4KeyboardManualTeleop()
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
-        node.destroy_node()
+        if node is not None:
+            node.destroy_node()
         try:
             rclpy.shutdown()
         except Exception:
             pass
+        _tty_restore(tty_saved)
 
 
 if __name__ == "__main__":
